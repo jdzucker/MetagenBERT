@@ -1,87 +1,79 @@
-import os
-import torch
-import numpy as np
-import json
+import argparse
 import multiprocessing
+import os
+import numpy as np
 
-def get_abundance(sample,number):
-    abundance = {}
-    for i in range(number):
-        abundance[i] = 0
-    for assign in os.listdir(sample):
-        print(assign)
-        if "assign" in assign:
-            assign = os.path.join(sample, assign)
-            assigned = np.load(assign)
-            for read in assigned:
-                ele = read[0]
-                if ele in abundance:
-                    abundance[ele] += 1
-    total_assigned = sum(abundance.values())
-    abundance = {ele: count / total_assigned for ele, count in abundance.items()}
-    print(abundance)
-    print(len(abundance))
-    abundance_list = [abundance[i] for i in range(number)]
-    print(sum(abundance_list))
-    print(len(abundance_list))
-    return abundance_list
 
-def get_abundance(sample,number):
+def get_abundance(sample, number, fraction=0.1):
     print(sample)
-    abundance = np.zeros((number))
-    for assign in os.listdir(sample):
-        if "assign" in assign:
-            assign = os.path.join(sample, assign)
-            assigned = np.load(assign)
-            assigned = assigned[:len(assigned)//10]
-            for read in assigned:
-                ele = read[0]
-                if ele < number:
-                    abundance[ele] += 1
+    abundance = np.zeros(number, dtype=np.float64)
+    for assign in sorted(os.listdir(sample)):
+        if "assign" not in assign:
+            continue
+        assign_path = os.path.join(sample, assign)
+        assigned = np.load(assign_path)
+        if len(assigned) == 0:
+            continue
+
+        # Keep 10% of assignments to match current experiment settings.
+        end = max(1, int(len(assigned) * fraction))
+        for read in assigned[:end]:
+            cluster_id = int(read[0])
+            if 0 <= cluster_id < number:
+                abundance[cluster_id] += 1
+
     total_assigned = np.sum(abundance)
-    abundance = abundance / total_assigned
-    np.save(sample + "/abundance_10.npy", abundance)
-    print(sample,"saved")
+    if total_assigned > 0:
+        abundance = abundance / total_assigned
+    else:
+        print(f"No assignments found in {sample}; saving a zero vector.")
+
+    np.save(os.path.join(sample, "abundance_10.npy"), abundance)
+    print(sample, "saved")
     return abundance
 
-"""def all_samples(samples_dir,number):
-    samples = os.listdir(samples_dir)
-    samples.sort()
-    for sample in samples:
-        print(sample)
-        sample = os.path.join(samples_dir, sample)
-        abundance = get_abundance(sample,number)
-        np.save(sample + "/abundance.npy", abundance)
-        print(sample,"saved")
-"""
-def all_samples_parallel(samples_dir,number):
-    samples = os.listdir(samples_dir)
-    samples.sort()
-    with multiprocessing.Pool(processes=32) as pool:
-        for sample in samples:
-            sample = os.path.join(samples_dir, sample)
-            pool.apply_async(get_abundance, args=(sample,number))
-        pool.close()
-        pool.join()
 
-def all_numbers(numbers_dir):
-    numbers = os.listdir(numbers_dir)
-    numbers.sort()
+def all_samples_parallel(samples_dir, number, processes=32):
+    samples = sorted(os.listdir(samples_dir))
+    sample_paths = [
+        os.path.join(samples_dir, sample)
+        for sample in samples
+        if os.path.isdir(os.path.join(samples_dir, sample))
+    ]
+    if not sample_paths:
+        print(f"No sample directories found in {samples_dir}")
+        return
+
+    worker_count = min(processes, os.cpu_count() or 1)
+    with multiprocessing.Pool(processes=worker_count) as pool:
+        pool.starmap(get_abundance, [(sample, number) for sample in sample_paths])
+
+
+def all_numbers(numbers_dir, processes=32):
+    numbers = sorted(os.listdir(numbers_dir))
     for number in numbers:
+        if not number.isdigit():
+            continue
         print(number)
-        #if "4096" in number:
-        #    continue
-        samples_dir = os.path.join(os.path.join(numbers_dir, number),"Fold_0/all")
-        #all_samples_parallel(samples_dir,int(number))
-        #samples_dir = os.path.join(os.path.join(numbers_dir, number),"Fold_0/test")
-        all_samples_parallel(samples_dir,int(number))
+        samples_dir = os.path.join(numbers_dir, number, "Fold_0", "all")
+        if not os.path.isdir(samples_dir):
+            print(f"Skipping missing directory: {samples_dir}")
+            continue
+        all_samples_parallel(samples_dir, int(number), processes=processes)
 
-#print("cirrhosis DNABERT_2")
-#all_numbers("/data/db/deepintegromics/passoli_datasets/reads/cirrhosis/DNABERT_2/clusters_global_ordered/mean/")
-#print("cirrhosis DNABERT_S")
-#all_numbers("/data/db/deepintegromics/passoli_datasets/reads/cirrhosis/DNABERT_S/clusters_global_ordered/mean/")
-#print("t2d DNABERT_2")
-all_numbers("/data/db/deepintegromics/passoli_datasets/reads/t2d/clusters_global_ordered/mean/")
-#print("t2d DNABERT_S")
-#all_numbers("/data/db/deepintegromics/passoli_datasets/reads/t2d/DNABERT_S/clusters_global_ordered/mean/")
-#all_samples("/data/db/deepintegromics/passoli_datasets/reads/cirrhosis/clusters_global_ordered/mean/4096/Fold_0/all")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Compute normalized cluster abundances.")
+    parser.add_argument(
+        "numbers_dir",
+        type=str,
+        help="Directory that contains one folder per cluster count (e.g. 16, 32, ...).",
+    )
+    parser.add_argument(
+        "--processes",
+        type=int,
+        default=32,
+        help="Number of worker processes to use.",
+    )
+    args = parser.parse_args()
+    all_numbers(args.numbers_dir, processes=args.processes)

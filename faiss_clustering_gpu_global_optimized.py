@@ -8,11 +8,20 @@ import json
 import random
 import glob
 
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = str(value).strip().lower()
+    if value in {"1", "true", "t", "yes", "y"}:
+        return True
+    if value in {"0", "false", "f", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
 def load_data_from_one(s_path, use_perc=False, file_of_lens=None, raw=10000, perc = 0.01):
     L_files = os.listdir(s_path)
     random.shuffle(L_files)
     data = []
-    use_perc = False
     if use_perc:
         dict_lens = json.load(open(file_of_lens))
         n_to_load = dict_lens[s_path.split("/")[-1]]*perc
@@ -156,15 +165,15 @@ def assign_by_batch(data_path, gpu_index_list, save_path_list, nb_batch=200):
 
 
 def cross_val(path, save_path, n_clusters, n_iter, verbose, min_points, max_points, use_perc=False, file_of_lens=None, raw=10000, perc=0.1, nb_batch=200):
-    save_path_list = [os.path.join(save_path,str(n_samples)) for n_samples in [16,32,64,128,256,512,1024,2048,4096,8192,16384]]
+    n_clusters_list = sorted(set([16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, n_clusters]))
+    save_path_list = [os.path.join(save_path, str(n_samples)) for n_samples in n_clusters_list]
     for save_path in save_path_list:
         os.makedirs(save_path, exist_ok=True)
     samples=[os.path.join(path,f) for f in os.listdir(path)]
     np.random.shuffle(samples)
     Folds = np.array_split(samples, 10)
-    i=0
     tdeb=time.time()
-    while i < 1:
+    for i in range(len(Folds)):
         tepoch=time.time()
         test = Folds[i]
         if i==0:
@@ -185,10 +194,13 @@ def cross_val(path, save_path, n_clusters, n_iter, verbose, min_points, max_poin
         data = load_data_from_everywhere(train, use_perc, file_of_lens, raw, perc)
         print("Loading over :",time.time()-tdeb,"seconds")
         tload=time.time()
-        n_clusters_list = [16,32,64,128,256,512,1024,2048,4096,8192,16384]
         gpu_index_list = []
-        for n_clusters,save_path_i in zip(n_clusters_list,save_path_i_list) :
-            gpu_index_list.append(train_kmeans_faiss_multi_gpu(data, save_path_i, n_clusters, n_iter, verbose, min_points, max_points))
+        for n_clusters_i, save_path_i in zip(n_clusters_list, save_path_i_list):
+            gpu_index_list.append(
+                train_kmeans_faiss_multi_gpu(
+                    data, save_path_i, n_clusters_i, n_iter, verbose, min_points, max_points
+                )
+            )
         print("Training over :",time.time()-tload,"seconds")
         ttrain=time.time()
         for f in train:
@@ -197,7 +209,6 @@ def cross_val(path, save_path, n_clusters, n_iter, verbose, min_points, max_poin
             assign_by_batch(f, gpu_index_list, [os.path.join(test_save_path_i, f.split("/")[-1]) for test_save_path_i in test_save_path_i_list], nb_batch)
         print("Assigning over :",time.time()-ttrain,"seconds")
         print("Epoch over :",time.time()-tepoch,"seconds")
-        i+=1
     print("Total time :",time.time()-tdeb,"seconds")
     
     
@@ -207,10 +218,10 @@ if __name__ == "__main__":
     parser.add_argument("save_path", type=str, help="Path to save the clustering results")
     parser.add_argument("n_clusters", type=int, help="Number of clusters to form")
     parser.add_argument("n_iter", type=int, default=20, help="Number of iterations for the K-means algorithm")
-    parser.add_argument("verbose", type=bool, default=True, help="Whether to print the output during clustering")
+    parser.add_argument("verbose", type=parse_bool, default=True, help="Whether to print the output during clustering")
     parser.add_argument("min_points", type=int, default=32, help="Minimum number of points per cluster")
     parser.add_argument("max_points", type=int, default=1024, help="Maximum number of points per cluster")
-    parser.add_argument("use_perc", type=bool, default=False, help="Whether to use a percentage of the data")
+    parser.add_argument("use_perc", type=parse_bool, default=False, help="Whether to use a percentage of the data")
     parser.add_argument("file_of_lens", type=str, help="File containing the number of data points to use for each class")
     parser.add_argument("raw", type=int, default=10000, help="Number of data points to use if not using a percentage")
     parser.add_argument("perc", type=float, default=0.01, help="Percentage of the data to use")

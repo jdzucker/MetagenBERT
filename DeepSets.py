@@ -170,19 +170,6 @@ labels = [1 if label == "Y" else 0 for label in labels]
 
 data = np.array(data)
 labels = np.array(labels)
-# Normalize the data
-scaler = StandardScaler()
-
-#Scaling across all samples
-
-## When using clustering
-data_2d = data.reshape(data.shape[0]*data.shape[1],data.shape[2])
-data_2d = scaler.fit_transform(data_2d)
-data = data_2d.reshape(data.shape[0],data.shape[1],data.shape[2])
-
-## When using simple aggregations or abundance
-#data = scaler.fit_transform(data)
-#data = data.reshape(data.shape[0],1,data.shape[1])
 
 # Shuffle the data and labels
 print(data.shape)
@@ -209,11 +196,27 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(data)):
     optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
     best_auc = 0
     best_acc = 0
+    best_conf_matrix = np.zeros((2, 2), dtype=int)
     print(f"Starting Fold {fold + 1}/{kf.n_splits}")
     
     # Split data
     train_data, test_data = data[train_idx], data[val_idx]
     train_labels, test_labels = labels[train_idx], labels[val_idx]
+
+    # Fit scaler on train only to avoid leakage across folds.
+    scaler = StandardScaler()
+    if train_data.ndim == 3:
+        train_shape = train_data.shape
+        test_shape = test_data.shape
+        train_data_2d = train_data.reshape(train_shape[0] * train_shape[1], train_shape[2])
+        test_data_2d = test_data.reshape(test_shape[0] * test_shape[1], test_shape[2])
+        train_data = scaler.fit_transform(train_data_2d).reshape(train_shape)
+        test_data = scaler.transform(test_data_2d).reshape(test_shape)
+    else:
+        train_data = scaler.fit_transform(train_data)
+        test_data = scaler.transform(test_data)
+        train_data = train_data.reshape(train_data.shape[0], 1, train_data.shape[1])
+        test_data = test_data.reshape(test_data.shape[0], 1, test_data.shape[1])
    
     #train_data, test_data, train_labels, test_labels = train_test_split(data, labels, test_size=0.1, random_state=42)
     print("Train data shape:", train_data.shape)
@@ -223,9 +226,9 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(data)):
 
     # Convert data and labels to PyTorch tensors
     train_data = torch.tensor(train_data, dtype=torch.float32).to("cuda")
-    train_labels = torch.tensor(train_labels, dtype=torch.float32).to("cuda")
+    train_labels_tensor = torch.tensor(train_labels, dtype=torch.float32).to("cuda")
     test_data = torch.tensor(test_data, dtype=torch.float32).to("cuda")
-    test_labels = torch.tensor(test_labels, dtype=torch.float32).to("cuda")
+    test_labels_tensor = torch.tensor(test_labels, dtype=torch.float32).to("cuda")
     n_batches = math.ceil(len(train_data) / batch_size)
 
     for epoch in range(n_epochs):
@@ -234,7 +237,7 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(data)):
         for i in range(n_batches):
             optimizer.zero_grad()
             batch_data = train_data[i * batch_size : (i + 1) * batch_size]
-            batch_labels = train_labels[i * batch_size : (i + 1) * batch_size]
+            batch_labels = train_labels_tensor[i * batch_size : (i + 1) * batch_size]
             output, _ = model.forward(batch_data)
             loss = model.criterion(output.squeeze(), batch_labels)
             loss.backward()
@@ -243,18 +246,17 @@ for fold, (train_idx, val_idx) in enumerate(kf.split(data)):
             model.eval()
             with torch.no_grad():
                 output, _ = model.forward(test_data)
-                test_labels = torch.tensor(test_labels, dtype=torch.float32).to("cuda")
-                test_loss = model.criterion(output.squeeze(), test_labels)
+                test_loss = model.criterion(output.squeeze(), test_labels_tensor)
                 test_pred = torch.sigmoid(output.squeeze()).cpu().numpy()
-                test_labels = test_labels.cpu().numpy()
-                print(test_labels)
+                test_labels_np = test_labels_tensor.cpu().numpy()
+                print(test_labels_np)
                 print(test_pred)
-                test_auc = roc_auc_score(test_labels, test_pred)
-                test_acc = accuracy_score(test_labels, test_pred > 0.5)
-                test_f1 = f1_score(test_labels, test_pred > 0.5)
-                test_precision = precision_score(test_labels, test_pred > 0.5)
-                test_recall = recall_score(test_labels, test_pred > 0.5)
-                conf_matrix = confusion_matrix(test_labels, test_pred > 0.5)
+                test_auc = roc_auc_score(test_labels_np, test_pred)
+                test_acc = accuracy_score(test_labels_np, test_pred > 0.5)
+                test_f1 = f1_score(test_labels_np, test_pred > 0.5)
+                test_precision = precision_score(test_labels_np, test_pred > 0.5)
+                test_recall = recall_score(test_labels_np, test_pred > 0.5)
+                conf_matrix = confusion_matrix(test_labels_np, test_pred > 0.5)
             print(
                 f"Epoch {epoch + 1}/{n_epochs} ({time.time() - start_time:.1f}s): "
                 f"Train loss: {loss:.4f}, "

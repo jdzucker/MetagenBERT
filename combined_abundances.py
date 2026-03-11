@@ -2,6 +2,7 @@ from sklearn.linear_model import LogisticRegressionCV
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
 from sklearn.metrics import accuracy_score, roc_auc_score, make_scorer
+from sklearn.pipeline import make_pipeline
 import torch
 import os
 import pandas as pd
@@ -127,21 +128,9 @@ for d in data :
 data = np.array(data)
 labels = np.array(labels)
 
-# Normalize the data
-scaler_abu = StandardScaler()
-scaler_clust = StandardScaler()
-
-#Scaling across all samples
-
-## When using simple aggregations or abundance
-abu=scaler_abu.fit_transform(abundance)
-data = scaler_clust.fit_transform(data)
-#data = data.reshape(data.shape[0],1,data.shape[1])
-
-#data = np.concatenate((data,abu),axis=1)
-
 ## Using only abundance
-#data = abu
+#data = abundance
+#data = np.concatenate((data, abundance), axis=1)
 
 print(data.shape)
 
@@ -159,26 +148,30 @@ auc_list = []
 cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=random_state)
 
 # Logistic Regression with LASSO and built-in cross-validation
-model = LogisticRegressionCV(
-    penalty='l1', 
-    solver='liblinear', 
-    cv=cv,               # 10-fold cross-validation
-    scoring='accuracy', # Use accuracy for model selection
-    random_state=random_state,
+model = make_pipeline(
+    StandardScaler(),
+    LogisticRegressionCV(
+        penalty='l1',
+        solver='liblinear',
+        cv=cv,               # 10-fold cross-validation
+        scoring='accuracy',  # Use accuracy for model selection
+        random_state=random_state,
+    ),
 )
 
 # Fit the model
 model.fit(data, labels)
+log_reg = model.named_steps["logisticregressioncv"]
 err_list=[]
 best_list=[]
 #print("Fold-specific accuracies:")
 
-scores = list(model.scores_.values())[0]
+scores = list(log_reg.scores_.values())[0]
 mean_scores = np.mean(scores, axis=0)
 std_scores = np.std(scores, axis=0)
 maxi = max(np.mean(scores,axis =0))
 idx = np.argmax(np.mean(scores,axis =0))
-for fold_idx, score in enumerate(model.scores_[1], start=1):  # '1' refers to the positive class
+for fold_idx, score in enumerate(log_reg.scores_[1], start=1):  # '1' refers to the positive class
     best_accuracy = score.max()  # Max accuracy for the fold
     best_list.append(best_accuracy)
 #    print(f"Fold {fold_idx}: Best Accuracy = {best_accuracy:.4f}")
@@ -193,30 +186,34 @@ print("Mean of Best :",np.mean(best_list))
 print("Standard Deviation of Best :",np.std(best_list))
 
 # Logistic Regression with LASSO and built-in cross-validation
-model = LogisticRegressionCV(
-    penalty='l1', 
-    solver='liblinear', 
-    cv=cv,               # 10-fold cross-validation
-    scoring='roc_auc', # Use accuracy for model selection
-    random_state=random_state,
+model = make_pipeline(
+    StandardScaler(),
+    LogisticRegressionCV(
+        penalty='l1',
+        solver='liblinear',
+        cv=cv,              # 10-fold cross-validation
+        scoring='roc_auc',  # Use AUC for model selection
+        random_state=random_state,
+    ),
 )
 
 # Fit the model
 model.fit(data, labels)
+log_reg = model.named_steps["logisticregressioncv"]
 
 best_list=[]
 err_list=[]
 #print("Fold-specific auc:")
 
 print(model)
-scores = list(model.scores_.values())[0]
+scores = list(log_reg.scores_.values())[0]
 mean_scores = np.mean(scores, axis=0)
 std_scores = np.std(scores, axis=0)
 maxi = max(np.mean(scores,axis =0))
 idx = np.argmax(np.mean(scores,axis =0))
 std_err = math.sqrt(sum(err_list)/len(data))
 
-for fold_idx, score in enumerate(model.scores_[1], start=1):  # '1' refers to the positive class
+for fold_idx, score in enumerate(log_reg.scores_[1], start=1):  # '1' refers to the positive class
     best_auc = score.max()  # Max accuracy for the fold
     best_list.append(best_auc)
     #print(f"Fold {fold_idx}: Best AUC = {best_auc:.4f}")
@@ -230,5 +227,4 @@ print("Standard Error of Mean Model AUC:", std_err)
 
 print("Mean of Best :",np.mean(best_list))
 print("Standard Deviation of Best :",np.std(best_list))
-
 
